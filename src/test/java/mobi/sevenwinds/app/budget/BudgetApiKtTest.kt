@@ -1,6 +1,9 @@
 package mobi.sevenwinds.app.budget
 
 import io.restassured.RestAssured
+import mobi.sevenwinds.app.author.AuthorCreateRequest
+import mobi.sevenwinds.app.author.AuthorRecord
+import mobi.sevenwinds.app.author.AuthorTable
 import mobi.sevenwinds.common.ServerTest
 import mobi.sevenwinds.common.jsonBody
 import mobi.sevenwinds.common.toResponse
@@ -15,6 +18,7 @@ class BudgetApiKtTest : ServerTest() {
     @BeforeEach
     internal fun setUp() {
         transaction { BudgetTable.deleteAll() }
+        transaction { AuthorTable.deleteAll() }
     }
 
     @Test
@@ -75,6 +79,54 @@ class BudgetApiKtTest : ServerTest() {
             .then().statusCode(400)
     }
 
+    @Test
+    fun testAddBudgetRecordsWithAuthor() {
+        val authorName = "Александр Сергеевич Пушкин"
+        val author = addAuthor(AuthorCreateRequest(authorName))
+
+        addRecord(BudgetRecord(2024, 4, 100, BudgetType.Приход, author.id))
+        addRecord(BudgetRecord(2024, 4, 200, BudgetType.Приход, author.id))
+        addRecord(BudgetRecord(2024, 4, 39, BudgetType.Расход))
+
+        RestAssured.given()
+            .get("/budget/year/2024/stats?limit=5&offset=0")
+            .toResponse<BudgetYearStatsResponse>().let { response ->
+                println(response.items)
+
+                Assert.assertEquals(authorName, response.items[0].authorName)
+                Assert.assertEquals(author.createdDate, response.items[0].createdDate)
+                Assert.assertEquals(authorName, response.items[1].authorName)
+                Assert.assertEquals(author.createdDate, response.items[1].createdDate)
+                Assert.assertEquals(response.items[2].authorName, null)
+                Assert.assertEquals(response.items[2].createdDate, "null")
+            }
+    }
+
+    @Test
+    fun testBudgetRecordsFilterByAuthorName() {
+        val authorName = "Александр Сергеевич Пушкин"
+        val author = addAuthor(AuthorCreateRequest(authorName))
+
+        addRecord(BudgetRecord(2024, 3, 100, BudgetType.Приход, author.id))
+        addRecord(BudgetRecord(2024, 4, 200, BudgetType.Приход, author.id))
+        addRecord(BudgetRecord(2024, 4, 300, BudgetType.Приход, author.id))
+        addRecord(BudgetRecord(2024, 4, 400, BudgetType.Приход, author.id))
+        addRecord(BudgetRecord(2024, 5, 500, BudgetType.Приход))
+        addRecord(BudgetRecord(2024, 5, 130, BudgetType.Расход, author.id))
+
+        RestAssured.given()
+            .get("/budget/year/2024/stats?limit=3&offset=0&authorName=сЕрГе")
+            .toResponse<BudgetYearStatsResponse>().let { response ->
+                println("${response.total} / ${response.items} / ${response.totalByType}")
+
+                Assert.assertEquals(5, response.total)
+                Assert.assertEquals(3, response.items.size)
+                Assert.assertEquals(1000, response.totalByType[BudgetType.Приход.name])
+                Assert.assertEquals(130, response.totalByType[BudgetType.Расход.name])
+            }
+    }
+
+
     private fun addRecord(record: BudgetRecord) {
         RestAssured.given()
             .jsonBody(record)
@@ -83,4 +135,9 @@ class BudgetApiKtTest : ServerTest() {
                 Assert.assertEquals(record, response)
             }
     }
+
+    private fun addAuthor(author: AuthorCreateRequest) = RestAssured.given()
+        .jsonBody(author)
+        .post("/author/add")
+        .toResponse<AuthorRecord>()
 }
